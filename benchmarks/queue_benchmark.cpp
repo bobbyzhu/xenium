@@ -156,7 +156,9 @@ namespace {
   #ifdef WITH_GENERIC_EPOCH_BASED
       make_benchmark_builder<ramalhete_queue<QUEUE_ITEM*, policy::reclaimer<reclamation::epoch_based<>>>>(),
       make_benchmark_builder<ramalhete_queue<QUEUE_ITEM*, policy::reclaimer<reclamation::new_epoch_based<>>>>(),
-      make_benchmark_builder<ramalhete_queue<QUEUE_ITEM*, policy::reclaimer<reclamation::debra<>>>>(),
+
+      make_benchmark_builder<ramalhete_queue<QUEUE_ITEM*, policy::reclaimer<reclamation::debra<>>, policy::step_size<1>>>(),
+      make_benchmark_builder<ramalhete_queue<QUEUE_ITEM*, policy::reclaimer<reclamation::debra<>>, policy::step_size<11>>>(),
   #endif
   #ifdef WITH_QUIESCENT_STATE_BASED
     make_benchmark_builder<ramalhete_queue<QUEUE_ITEM*, policy::reclaimer<reclamation::quiescent_state_based>>>(),

@@ -27,6 +27,9 @@ namespace policy {
    */
   template <unsigned Value>
   struct pop_retries;
+
+  template <unsigned Value>
+  struct step_size;
 }
 
 /**
@@ -67,8 +70,9 @@ public:
   using reclaimer = parameter::type_param_t<policy::reclaimer, parameter::nil, Policies...>;
   using backoff = parameter::type_param_t<policy::backoff, no_backoff, Policies...>;
   static constexpr unsigned entries_per_node = parameter::value_param_t<unsigned, policy::entries_per_node, 512, Policies...>::value;
-  static constexpr unsigned padding_bytes = parameter::value_param_t<unsigned, policy::padding_bytes, sizeof(raw_value_type), Policies...>::value;
+  static constexpr unsigned padding_bytes = parameter::value_param_t<unsigned, policy::padding_bytes, 0, Policies...>::value;
   static constexpr unsigned pop_retries = parameter::value_param_t<unsigned, policy::pop_retries, 10, Policies...>::value;;
+  static constexpr unsigned step_size = parameter::value_param_t<unsigned, policy::step_size, 11, Policies...>::value;;;
 
   static_assert(entries_per_node > 0, "entries_per_node must be greater than zero");
   static_assert(parameter::is_set<reclaimer>::value, "reclaimer policy must be specified");
@@ -102,6 +106,7 @@ private:
   using marked_ptr = typename concurrent_ptr::marked_ptr;
   using guard_ptr = typename concurrent_ptr::guard_ptr;
 
+  // TODO - use type from traits
   using marked_value = xenium::marked_ptr<std::remove_pointer_t<raw_value_type>, 1>;
 
   struct padded_entry {
@@ -123,7 +128,11 @@ public:
   static constexpr std::size_t entry_size = sizeof(entry);
 
 private:
+  static constexpr unsigned max_idx = step_size * entries_per_node;
+
   struct node : reclaimer::template enable_concurrent_ptr<node> {
+    // pop_idx and push_idx are incremented by step_size to avoid false sharing, so the
+    // actual index has to be calculated modulo entries_per_node
     std::atomic<unsigned>     pop_idx;
     entry entries[entries_per_node];
     std::atomic<unsigned>     push_idx;
@@ -132,7 +141,7 @@ private:
     // Start with the first entry pre-filled
     node(raw_value_type item) :
       pop_idx{0},
-      push_idx{1},
+      push_idx{step_size},
       next{nullptr}
     {
       entries[0].value.store(item, std::memory_order_relaxed);
@@ -141,8 +150,8 @@ private:
     }
 
     ~node() {
-      for (unsigned i = pop_idx; i < push_idx; ++i) {
-        traits::delete_value(entries[i].value.load(std::memory_order_relaxed).get());
+      for (unsigned i = pop_idx; i < push_idx; i += step_size) {
+        traits::delete_value(entries[i % entries_per_node].value.load(std::memory_order_relaxed).get());
       }
     }
   };
@@ -187,9 +196,8 @@ void ramalhete_queue<T, Policies...>::push(value_type value)
     // (3) - this acquire-load synchronizes-with the release-CAS (5, 7)
     t.acquire(tail, std::memory_order_acquire);
 
-    const unsigned idx = t->push_idx.fetch_add(1, std::memory_order_relaxed);
-    if (idx > entries_per_node - 1)
-    {
+    unsigned idx = t->push_idx.fetch_add(step_size, std::memory_order_relaxed);
+    if (idx >= max_idx) {
       // This node is full
       if (t != tail.load(std::memory_order_relaxed))
         continue; // some other thread already added a new node.
@@ -222,6 +230,7 @@ void ramalhete_queue<T, Policies...>::push(value_type value)
       }
       continue;
     }
+    idx %= entries_per_node;
 
     marked_value expected = nullptr;
     // (8) - this release-CAS synchronizes-with the acquire-exchange (12)
@@ -248,9 +257,8 @@ bool ramalhete_queue<T, Policies...>::try_pop(value_type &result)
         h->next.load(std::memory_order_relaxed) == nullptr)
       break;
 
-    const unsigned idx = h->pop_idx.fetch_add(1, std::memory_order_relaxed);
-    if (idx > entries_per_node - 1)
-    {
+    unsigned idx = h->pop_idx.fetch_add(step_size, std::memory_order_relaxed);
+    if (idx >= max_idx) {
       // This node has been drained, check if there is another one
       // (10) - this acquire-load synchronizes-with the release-CAS (4)
       auto next = h->next.load(std::memory_order_acquire);
@@ -264,6 +272,7 @@ bool ramalhete_queue<T, Policies...>::try_pop(value_type &result)
 
       continue;
     }
+    idx %= entries_per_node;
 
     if (pop_retries > 0) {
       unsigned cnt = 0;

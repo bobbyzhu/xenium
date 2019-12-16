@@ -17,6 +17,7 @@ struct descriptor<xenium::ramalhete_queue<T, Policies...>> {
     boost::property_tree::ptree pt;
     pt.put("type", "ramalhete_queue");
     pt.put_child("reclaimer", descriptor<typename queue::reclaimer>::generate());
+    pt.put("step_size", static_cast<unsigned>(queue::step_size));
     return pt;
   }
 };

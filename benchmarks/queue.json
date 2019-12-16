@@ -1,9 +1,12 @@
 {
   "type": "queue",
   "ds": {
-    "type": "michael_scott_queue",
+    "type": "ramalhete_queue",
     "reclaimer": {
-      "type": "epoch_based"
+      "type": "generic_epoch_based",
+      "scan_strategy": {
+        "type": "one_thread"
+      }
     }
   },
   "prefill": 10,
